@@ -1,0 +1,44 @@
+name: Release
+
+# Builds a self-contained binary and attaches it to a GitHub release, so the
+# fork can be installed with tools that expect release assets (e.g. mise's
+# github backend).
+
+on:
+  push:
+    tags: ['tig-*']
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Tig
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ASK=1 brew install readline
+          readline="$(brew --prefix readline)"
+          # Link the system curses and iconv, and readline statically, so the
+          # binary does not depend on Homebrew at runtime.
+          make DIST_VERSION="${GITHUB_REF_NAME#tig-}" prefix=/usr/local \
+            CPPFLAGS="-DHAVE_CURSES_H -DHAVE_READLINE -I$readline/include" \
+            LDFLAGS= \
+            LDLIBS="-lcurses -liconv $readline/lib/libreadline.a"
+          src/tig --version
+          if otool -L src/tig | tail -n +2 | grep -v -E '^[[:space:]]+/usr/lib/'; then
+            echo "error: src/tig links against non-system libraries" >&2
+            exit 1
+          fi
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          asset="$GITHUB_REF_NAME-macos-$(uname -m).tar.gz"
+          mkdir dist
+          cp src/tig COPYING dist/
+          tar -czf "$asset" -C dist tig COPYING
+          gh release create "$GITHUB_REF_NAME" "$asset" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
